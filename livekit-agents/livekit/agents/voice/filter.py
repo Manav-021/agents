@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import string
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,6 @@ class InterruptionFilter:
     Allows all input when agent is silent.
     """
 
-    # Default words that should be ignored when agent is speaking
     DEFAULT_IGNORE_WORDS: set[str] = {
         "yeah",
         "ok",
@@ -31,7 +31,8 @@ class InterruptionFilter:
         "yep",
         "yup",
         "gotcha",
-        "got it",
+        "got",
+        "it",
         "alright",
         "cool",
     }
@@ -45,22 +46,20 @@ class InterruptionFilter:
         self._enabled = enabled
         self._case_sensitive = case_sensitive
 
-        # Load ignore words from parameter, environment variable, or default
         if ignore_words is not None:
-            self._ignore_words = set(ignore_words)
+            raw_words = set(ignore_words)
         else:
             env_words = os.getenv("LIVEKIT_INTERRUPTION_IGNORE_WORDS")
             if env_words:
-                self._ignore_words = {w.strip() for w in env_words.split(",")}
+                raw_words = {w.strip() for w in env_words.split(",")}
                 logger.info(
                     "Loaded %d ignore words from environment variable",
-                    len(self._ignore_words),
+                    len(raw_words),
                 )
             else:
-                self._ignore_words = self.DEFAULT_IGNORE_WORDS.copy()
+                raw_words = self.DEFAULT_IGNORE_WORDS.copy()
 
-        if not self._case_sensitive:
-            self._ignore_words = {word.lower() for word in self._ignore_words}
+        self._ignore_words = {self._normalize_text(word) for word in raw_words if word.strip()}
 
         logger.info(
             "InterruptionFilter initialized with %d ignore words, enabled=%s, case_sensitive=%s",
@@ -69,14 +68,21 @@ class InterruptionFilter:
             self._case_sensitive,
         )
 
+    def _normalize_text(self, text: str) -> str:
+        normalized = text.strip()
+        if not self._case_sensitive:
+            normalized = normalized.lower()
+
+        return normalized.translate(
+            str.maketrans("", "", string.punctuation),
+        )
+
     @property
     def enabled(self) -> bool:
-        """Whether the filter is enabled."""
         return self._enabled
 
     @property
     def ignore_words(self) -> set[str]:
-        """Set of words that are ignored when agent is speaking."""
         return self._ignore_words.copy()
 
     def should_ignore_interruption(
@@ -84,10 +90,7 @@ class InterruptionFilter:
         transcribed_text: str,
         agent_is_speaking: bool,
     ) -> bool:
-        if not self._enabled:
-            return False
-
-        if not agent_is_speaking:
+        if not self._enabled or not agent_is_speaking:
             return False
 
         return self._is_backchanneling(transcribed_text)
@@ -96,42 +99,38 @@ class InterruptionFilter:
         if not text or not text.strip():
             return False
 
-        normalized_text = text.strip()
-        if not self._case_sensitive:
-            normalized_text = normalized_text.lower()
-
-        normalized_text = (
-            normalized_text.replace(".", "")
-            .replace(",", "")
-            .replace("!", "")
-            .replace("?", "")
-        )
-
+        normalized_text = self._normalize_text(text)
         words = normalized_text.split()
+
         if not words:
             return False
+
+        phrase = " ".join(words)
+
+        if phrase in self._ignore_words:
+            logger.debug(
+                "Detected backchanneling phrase: '%s'",
+                text,
+            )
+            return True
 
         for word in words:
             if word not in self._ignore_words:
                 logger.debug(
-                    "Detected real interruption: '%s' contains non-backchannel word '%s'",
+                    "Detected real interruption: '%s' contains '%s'",
                     text,
                     word,
                 )
                 return False
 
-        logger.debug("Detected backchanneling: '%s' - ignoring interruption", text)
+        logger.debug("Detected backchanneling: '%s'", text)
         return True
 
     def add_ignore_word(self, word: str) -> None:
-        normalized_word = word if self._case_sensitive else word.lower()
-        self._ignore_words.add(normalized_word)
-        logger.debug("Added '%s' to ignore list", word)
+        self._ignore_words.add(self._normalize_text(word))
 
     def remove_ignore_word(self, word: str) -> None:
-        normalized_word = word if self._case_sensitive else word.lower()
-        self._ignore_words.discard(normalized_word)
-        logger.debug("Removed '%s' from ignore list", word)
+        self._ignore_words.discard(self._normalize_text(word))
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
