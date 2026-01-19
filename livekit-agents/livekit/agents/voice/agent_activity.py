@@ -52,6 +52,7 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
 )
+from .filter import InterruptionFilter
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
@@ -65,7 +66,6 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
-from .interruption_filter import InterruptionFilter
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -1186,8 +1186,7 @@ class AgentActivity(RecognitionHooks):
             if len(split_words(transcript, split_character=True)) < opt.min_interruption_words:
                 return
         agent_is_speaking = (
-            self._current_speech is not None
-            and not self._current_speech.interrupted
+            self._current_speech is not None and not self._current_speech.interrupted
         )
 
         if self._interruption_filter.should_ignore_interruption(
